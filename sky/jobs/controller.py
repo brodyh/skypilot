@@ -4,6 +4,7 @@ TODO(cooperc): Document lifecycle, and multiprocess layout.
 """
 import argparse
 import multiprocessing
+from multiprocessing.synchronize import Event as EventClass
 import os
 import pathlib
 import shutil
@@ -53,9 +54,11 @@ def _get_dag_and_name(dag_yaml: str) -> Tuple['sky.Dag', str]:
 class JobsController:
     """Each jobs controller manages the life cycle of one managed job."""
 
-    def __init__(self, job_id: int, dag_yaml: str) -> None:
+    def __init__(self, job_id: int, dag_yaml: str,
+                 cancel_event: EventClass) -> None:
         self._job_id = job_id
         self._dag, self._dag_name = _get_dag_and_name(dag_yaml)
+        self._cancel_event = cancel_event
         logger.info(self._dag)
         # TODO(zhwu): this assumes the specific backend.
         self._backend = cloud_vm_ray_backend.CloudVmRayBackend()
@@ -209,8 +212,23 @@ class JobsController:
                                       callback_func=callback_func)
 
         while True:
-            time.sleep(managed_job_utils.JOB_STATUS_CHECK_GAP_SECONDS)
+            # Wait for the check interval OR until cancellation event is set
+            # event.wait() returns True if set, False on timeout
+            if self._cancel_event.wait(
+                    timeout=managed_job_utils.JOB_STATUS_CHECK_GAP_SECONDS):
+                # Event was set - handle cancellation
+                logger.info(
+                    f'Job {self._job_id} cancellation requested via event')
+                # Download logs before exiting
+                _, handle = backend_utils.refresh_cluster_status_handle(
+                    cluster_name,
+                    force_refresh_statuses=set(status_lib.ClusterStatus))
+                if handle is not None:
+                    self._download_log_and_stream(task_id, handle)
+                raise exceptions.ManagedJobUserCancelledError(
+                    'Cancelled via event')
 
+            # If we reach here, it was a timeout (not cancellation)
             # Check the network connection to avoid false alarm for job failure.
             # Network glitch was observed even in the VM.
             try:
@@ -430,6 +448,10 @@ class JobsController:
             self._update_failed_task_state(
                 task_id, managed_job_state.ManagedJobStatus.FAILED_NO_RESOURCE,
                 failure_reason)
+        except exceptions.ManagedJobUserCancelledError:
+            # User cancelled the job, logs have already been downloaded in
+            # _run_one_task.
+            logger.info(f'Job {self._job_id} cancelled by user.')
         except (Exception, SystemExit) as e:  # pylint: disable=broad-except
             with ux_utils.enable_traceback():
                 logger.error(traceback.format_exc())
@@ -469,11 +491,11 @@ class JobsController:
                 task=self._dag.tasks[task_id]))
 
 
-def _run_controller(job_id: int, dag_yaml: str):
+def _run_controller(job_id: int, dag_yaml: str, cancel_event: EventClass):
     """Runs the controller in a remote process for interruption."""
     # The controller needs to be instantiated in the remote process, since
     # the controller is not serializable.
-    jobs_controller = JobsController(job_id, dag_yaml)
+    jobs_controller = JobsController(job_id, dag_yaml, cancel_event)
     jobs_controller.run()
 
 
@@ -554,6 +576,7 @@ def start(job_id, dag_yaml):
     controller_process = None
     cancelling = False
     task_id = None
+    cancel_event = multiprocessing.Event()
     try:
         _handle_signal(job_id)
         # TODO(suquark): In theory, we should make controller process a
@@ -563,7 +586,8 @@ def start(job_id, dag_yaml):
         #  So we can only enable daemon after we no longer need to
         #  start daemon processes like Ray.
         controller_process = multiprocessing.Process(target=_run_controller,
-                                                     args=(job_id, dag_yaml))
+                                                     args=(job_id, dag_yaml,
+                                                           cancel_event))
         controller_process.start()
         while controller_process.is_alive():
             _handle_signal(job_id)
@@ -579,6 +603,26 @@ def start(job_id, dag_yaml):
             callback_func=managed_job_utils.event_callback_func(
                 job_id=job_id, task_id=task_id, task=dag.tasks[task_id]))
         cancelling = True
+
+        # Signal the controller to cancel gracefully
+        if controller_process.is_alive():
+            logger.info('Setting cancellation event for controller')
+            cancel_event.set()
+
+            # Wait for graceful shutdown
+            grace_period = 240  # seconds
+            start_time = time.time()
+            while controller_process.is_alive(
+            ) and time.time() - start_time < grace_period:
+                time.sleep(0.5)
+
+            if not controller_process.is_alive():
+                logger.info(
+                    'Controller exited gracefully after receiving cancel event')
+            else:
+                logger.info(
+                    'Controller did not exit within grace period, will force kill'
+                )
     finally:
         if controller_process is not None:
             logger.info(f'Killing controller process {controller_process.pid}.')
