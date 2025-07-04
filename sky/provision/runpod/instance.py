@@ -2,6 +2,7 @@
 import time
 from typing import Any, Dict, List, Optional
 
+from sky import exceptions
 from sky import sky_logging
 from sky.provision import common
 from sky.provision.runpod import utils
@@ -12,6 +13,10 @@ from sky.utils import ux_utils
 
 POLL_INTERVAL = 5
 QUERY_PORTS_TIMEOUT_SECONDS = 30
+# Maximum time to wait for instances to become ready (30 minutes)
+INSTANCE_READY_TIMEOUT_SECONDS = 60 * 20
+# Time to wait before checking if instances are at least pending
+INSTANCE_PENDING_TIMEOUT_SECONDS = 30
 
 logger = sky_logging.init_logger(__name__)
 
@@ -107,16 +112,78 @@ def run_instances(region: str, cluster_name_on_cloud: str,
             head_instance_id = instance_id
 
     # Wait for instances to be ready.
+    start_time = time.time()
     while True:
+        elapsed_time = time.time() - start_time
         instances = _filter_instances(cluster_name_on_cloud, ['RUNNING'])
         ready_instance_cnt = 0
         for instance_id, instance in instances.items():
             if instance.get('ssh_port') is not None:
                 ready_instance_cnt += 1
-        logger.info('Waiting for instances to be ready: '
-                    f'({ready_instance_cnt}/{config.count}).')
+        logger.info(
+            'Waiting for instances to be ready: '
+            f'({ready_instance_cnt}/{config.count}). '
+            f'Elapsed: {elapsed_time/60:.1f} minutes, '
+            f'Max wait: {INSTANCE_READY_TIMEOUT_SECONDS/60:.1f} minutes.')
         if ready_instance_cnt == config.count:
             break
+
+        # Early check: ensure instances exist and are in valid states
+        if elapsed_time > INSTANCE_PENDING_TIMEOUT_SECONDS:
+            all_instances = _filter_instances(cluster_name_on_cloud, None)
+            found_instances = [
+                i for i in created_instance_ids if i in all_instances
+            ]
+
+            if not found_instances:
+                raise exceptions.NoClusterLaunchedError(
+                    'RunPod instances not found after creation.')
+
+            # Check if any instances are in valid states
+            valid_states = ['CREATED', 'RESTARTING', 'PAUSED', 'RUNNING']
+            valid_count = sum(1 for i in found_instances
+                              if all_instances[i].get('status') in valid_states)
+
+            if valid_count == 0:
+                # Log statuses for debugging
+                for inst_id in found_instances:
+                    logger.error(
+                        f'Instance {inst_id} status: '
+                        f'{all_instances[inst_id].get("status", "Unknown")}')
+                raise exceptions.NoClusterLaunchedError(
+                    'All RunPod instances are in invalid states.')
+            elif valid_count < config.count:
+                # Partial failure - some instances failed
+                for inst_id in created_instance_ids:
+                    if inst_id in all_instances:
+                        logger.error(
+                            f'Instance {inst_id} status: '
+                            f'{all_instances[inst_id].get("status", "Unknown")}'
+                        )
+                    else:
+                        logger.error(f'Instance {inst_id} not found')
+                raise RuntimeError(
+                    f'Partial cluster failure: only {valid_count}/'
+                    f'{config.count} instances are in valid states.')
+            else:
+                statuses = [
+                    instance.get('status')
+                    for instance in all_instances.values()
+                ]
+                logger.info(
+                    f'valid_count: {valid_count} config.count: {config.count} '
+                    f'statuses: {statuses}')
+
+        # Check for overall timeout
+        if elapsed_time > INSTANCE_READY_TIMEOUT_SECONDS:
+            logger.error(
+                f'Timeout waiting for instances to be ready after '
+                f'{INSTANCE_READY_TIMEOUT_SECONDS} seconds. '
+                f'Only {ready_instance_cnt}/{config.count} instances are ready.'
+            )
+            raise RuntimeError(
+                f'RunPod instances failed to become ready within '
+                f'{INSTANCE_READY_TIMEOUT_SECONDS} seconds.')
 
         time.sleep(POLL_INTERVAL)
     assert head_instance_id is not None, 'head_instance_id should not be None'

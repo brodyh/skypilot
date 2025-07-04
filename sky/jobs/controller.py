@@ -10,11 +10,11 @@ import pathlib
 import shutil
 import time
 import traceback
-import typing
 from typing import Optional, Tuple
 
 import filelock
 
+import sky
 from sky import exceptions
 from sky import sky_logging
 from sky.backends import backend_utils
@@ -34,9 +34,6 @@ from sky.utils import dag_utils
 from sky.utils import status_lib
 from sky.utils import subprocess_utils
 from sky.utils import ux_utils
-
-if typing.TYPE_CHECKING:
-    import sky
 
 # Use the explicit logger name so that the logger is under the
 # `sky.jobs.controller` namespace when executed directly, so as
@@ -573,6 +570,10 @@ def _cleanup(job_id: int, dag_yaml: str):
 
 def start(job_id, dag_yaml):
     """Start the controller."""
+    logger.info(f'Starting managed job controller for job {job_id}')
+    logger.info(
+        f'SkyPilot version: {sky.__version__}, commit: {sky.__commit__}')
+
     controller_process = None
     cancelling = False
     task_id = None
