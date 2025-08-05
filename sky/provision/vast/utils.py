@@ -86,7 +86,7 @@ def launch(name: str, instance_type: str, region: str, disk_size: int,
     gpu_name = instance_type.split('-')[1].replace('_', ' ')
     num_gpus = int(instance_type.split('-')[0].replace('x', ''))
 
-    query = ' '.join([
+    query_parts = [
         'chunked=true',
         'georegion=true',
         f'geolocation="{region[-2:]}"',
@@ -94,7 +94,10 @@ def launch(name: str, instance_type: str, region: str, disk_size: int,
         f'num_gpus={num_gpus}',
         f'gpu_name="{gpu_name}"',
         f'cpu_ram>="{cpu_ram}"',
-    ])
+        'datacenter=true',  # Always use secure cloud
+    ]
+
+    query = ' '.join(query_parts)
 
     instance_list = vast.vast().search_offers(query=query)
 

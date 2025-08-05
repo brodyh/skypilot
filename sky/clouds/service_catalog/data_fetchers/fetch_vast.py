@@ -79,9 +79,10 @@ if __name__ == '__main__':
     #     in order to ensure that machines with
     #     small disk pools aren't listed
     #
+    # Always use secure cloud (verified instances only)
     offerList = vast.vast().search_offers(
         query=('georegion = true chunked = true '
-               'inet_down >= 100 disk_space >= 80'),
+               'inet_down >= 100 disk_space >= 80 datacenter = true'),
         limit=10000)
 
     priceMap: Dict[str, List] = collections.defaultdict(list)
