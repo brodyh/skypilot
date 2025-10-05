@@ -758,7 +758,11 @@ def write_cluster_config(
     logging_agent = logs.get_logging_agent()
     if logging_agent:
         for k, v in logging_agent.get_credential_file_mounts().items():
-            assert k not in credentials, f'{k} already in credentials'
+            if k in credentials:
+                logger.info(
+                    'Skipping duplicate credential mount %s from '
+                    'logging agent.', k)
+                continue
             credentials[k] = v
 
     private_key_path, _ = auth_utils.get_or_generate_keys()
