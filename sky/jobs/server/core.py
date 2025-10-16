@@ -268,6 +268,10 @@ def launch(
     user_dag_str_user_specified = dag_utils.dump_chain_dag_to_yaml_str(
         dag, use_user_specified_yaml=True)
 
+    # Set the dag name from the name parameter if provided
+    if name is not None:
+        dag.name = name
+
     dag_utils.maybe_infer_and_fill_dag_and_task_names(dag)
 
     task_names = set()
