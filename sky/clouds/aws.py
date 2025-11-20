@@ -1334,6 +1334,7 @@ class AWS(clouds.Cloud):
     def _get_disk_specs(
             cls,
             disk_tier: Optional[resources_utils.DiskTier]) -> Dict[str, Any]:
+        # could change the max here if we wanted
         tier = cls._translate_disk_tier(disk_tier)
         tier2iops = {
             resources_utils.DiskTier.ULTRA: 20000,
@@ -1347,8 +1348,8 @@ class AWS(clouds.Cloud):
                          if cls._get_disk_type(tier) != 'standard' else None,
             # Custom disk throughput is only available for gp3
             # see https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-launchtemplate-ebs.html
-            'disk_throughput': tier2iops[tier] // 16
-                               if cls._get_disk_type(tier) == 'gp3' else None,
+            'disk_throughput': tier2iops[tier] //
+                               8 if cls._get_disk_type(tier) == 'gp3' else None,
         }
 
     @classmethod
