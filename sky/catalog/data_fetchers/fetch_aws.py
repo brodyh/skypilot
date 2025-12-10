@@ -120,6 +120,8 @@ def _get_instance_type_offerings(region: str) -> 'pd.DataFrame':
     client = aws.client('ec2', region_name=region)
     paginator = client.get_paginator('describe_instance_type_offerings')
     items = []
+    # Note: availability-zone LocationType returns both regular AZs and
+    # local zones (if enabled for the account)
     for i, resp in enumerate(
             paginator.paginate(LocationType='availability-zone')):
         print(f'{region} getting instance type offerings page {i}')
@@ -133,7 +135,15 @@ def _get_availability_zones(region: str) -> 'pd.DataFrame':
     client = aws.client('ec2', region_name=region)
     zones = []
     try:
-        response = client.describe_availability_zones()
+        # Include local zones (e.g., us-east-1-atl-2a) in addition to
+        # regular availability zones. Local zones must be opted-in
+        # by the user in their AWS account settings.
+        response = client.describe_availability_zones(
+            AllAvailabilityZones=False,
+            Filters=[{
+                'Name': 'zone-type',
+                'Values': ['availability-zone', 'local-zone']
+            }])
     except aws.botocore_exceptions().ClientError as e:
         if e.response['Error']['Code'] == 'AuthFailure':
             # The user's AWS account may not have access to this region.
