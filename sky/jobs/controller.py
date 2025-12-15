@@ -4,8 +4,10 @@ import asyncio
 import io
 import os
 import pathlib
+import re
 import resource
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -32,6 +34,7 @@ from sky.jobs import scheduler
 from sky.jobs import state as managed_job_state
 from sky.jobs import utils as managed_job_utils
 from sky.skylet import constants
+from sky.skylet import constants as skylet_constants
 from sky.skylet import job_lib
 from sky.usage import usage_lib
 from sky.utils import annotations
@@ -190,6 +193,92 @@ class JobController:
             task_envs[constants.TASK_ID_LIST_ENV_VAR] = '\n'.join(
                 job_id_env_vars)
             task.update_envs(task_envs)
+
+    def _refresh_ecr_credentials_if_needed(self) -> None:
+        """Automatically refresh ECR credentials if ECR server is detected.
+
+        If SKYPILOT_DOCKER_SERVER is set to an ECR endpoint, this method:
+        1. Extracts the AWS region from the ECR URL
+        2. Calls `aws ecr get-login-password` to get a fresh token
+        3. Updates SKYPILOT_DOCKER_USERNAME to "AWS"
+        4. Updates SKYPILOT_DOCKER_PASSWORD to the fresh token
+
+        This ensures ECR tokens are always fresh, avoiding the 12-hour expiration.
+        Falls back gracefully if AWS CLI is unavailable or fails.
+        """
+        # A DAG can contain multiple tasks (e.g., preprocess -> train -> eval).
+        # Check each task for ECR credentials that need refreshing.
+        for task in self._dag.tasks:
+            # Check both envs and secrets for DOCKER_SERVER
+            all_vars = {**(task.envs or {}), **(task.secrets or {})}
+            server = all_vars.get(skylet_constants.DOCKER_SERVER_ENV_VAR)
+
+            if not server:
+                continue  # No Docker server configured
+
+            # Check if this is an ECR URL
+            # Pattern: <account-id>.dkr.ecr.<region>.amazonaws.com
+            ecr_pattern = r'(\d+)\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com'
+            match = re.match(ecr_pattern, server)
+
+            if not match:
+                continue  # Not ECR, skip
+
+            region = match.group(2)
+            logger.info(f'Detected ECR server, refreshing credentials for '
+                        f'region {region}...')
+
+            try:
+                # Get fresh ECR token using AWS CLI
+                result = subprocess.run(
+                    ['aws', 'ecr', 'get-login-password', '--region', region],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=30)  # 30 second timeout
+                fresh_password = result.stdout.strip()
+
+                if not fresh_password:
+                    logger.warning(
+                        'aws ecr get-login-password returned empty token')
+                    continue
+
+                # Prepare updated credentials
+                updated_creds = {
+                    skylet_constants.DOCKER_USERNAME_ENV_VAR: 'AWS',
+                    skylet_constants.DOCKER_PASSWORD_ENV_VAR: fresh_password,
+                    skylet_constants.DOCKER_SERVER_ENV_VAR: server,  # Keep same
+                }
+
+                # Determine where credentials are stored (envs or secrets)
+                # and update in the same location
+                if skylet_constants.DOCKER_SERVER_ENV_VAR in (task.secrets or
+                                                               {}):
+                    # Stored in secrets
+                    task.update_secrets(updated_creds)
+                    logger.info(
+                        'Successfully refreshed ECR credentials in secrets')
+                else:
+                    # Stored in envs
+                    task.update_envs(updated_creds)
+                    logger.info(
+                        'Successfully refreshed ECR credentials in envs')
+
+            except FileNotFoundError:
+                logger.warning(
+                    'AWS CLI not found. Cannot refresh ECR credentials. '
+                    'Proceeding with existing credentials (may be expired).')
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    'Timeout while calling aws ecr get-login-password. '
+                    'Proceeding with existing credentials.')
+            except subprocess.CalledProcessError as e:
+                logger.warning(f'Failed to get ECR credentials: {e.stderr}. '
+                               'Proceeding with existing credentials.')
+            except Exception as e:  # pylint: disable=broad-except
+                logger.warning(
+                    f'Unexpected error refreshing ECR credentials: {e}. '
+                    'Proceeding with existing credentials.')
 
     def _download_log_and_stream(
         self,
@@ -355,6 +444,8 @@ class JobController:
         # failure. Otherwise, we will transit to recovering immediately.
         remote_job_submitted_at = time.time()
         if not is_resume:
+            # Refresh ECR credentials if needed
+            self._refresh_ecr_credentials_if_needed()
             launch_start = time.time()
 
             # Run the launch in a separate thread to avoid blocking the event
@@ -689,6 +780,8 @@ class JobController:
                 task_id=task_id,
                 force_transit_to_recovering=force_transit_to_recovering,
                 callback_func=callback_func)
+            # Refresh ECR credentials before recovery
+            self._refresh_ecr_credentials_if_needed()
 
             recovered_time = await self._strategy_executor.recover()
 
