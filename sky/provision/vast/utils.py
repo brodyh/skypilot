@@ -83,19 +83,23 @@ def launch(name: str, instance_type: str, region: str, disk_size: int,
       *  Vast instance types are an invention for skypilot. Refer to
          catalog/vast_catalog.py for the current construction
          of the type."""
-    cpu_ram = float(instance_type.split('-')[-1]) / 1024
+    # Parse instance type - format: {num_gpus}x-{gpu_name}-{cpu_cores}-{cpu_ram_mb}
+    cpu_ram_mb = float(instance_type.split('-')[-1])
+    # Subtract 1GB safety buffer to account for slight variations in offers
+    cpu_ram = (cpu_ram_mb - 1024) / 1024
     gpu_name = instance_type.split('-')[1].replace('_', ' ')
     num_gpus = int(instance_type.split('-')[0].replace('x', ''))
 
-    query = ' '.join([
-        'chunked=true',
+    query_parts = [
         'georegion=true',
         f'geolocation="{region[-2:]}"',
         f'disk_space>={disk_size}',
         f'num_gpus={num_gpus}',
         f'gpu_name="{gpu_name}"',
         f'cpu_ram>="{cpu_ram}"',
-    ])
+    ]
+
+    query = ' '.join(query_parts)
 
     instance_list = vast.vast().search_offers(query=query)
 

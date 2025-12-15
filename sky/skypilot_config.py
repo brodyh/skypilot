@@ -756,19 +756,33 @@ def override_skypilot_config(
     global _active_workspace_context
     _active_workspace_context = threading.local()
 
+    secure_only_value = override_configs.get_nested(('vast', 'secure_only'),
+                                                    None)
+
+    secure_ctx: contextlib.AbstractContextManager[
+        None] = contextlib.nullcontext()
+    if secure_only_value is not None:
+        from sky.catalog import (vast_catalog)  # pylint: disable=import-outside-toplevel
+        if isinstance(secure_only_value, str):
+            secure_bool = secure_only_value.lower() == 'true'
+        else:
+            secure_bool = bool(secure_only_value)
+        secure_ctx = vast_catalog.secure_only_override(secure_bool)
+
     try:
-        common_utils.validate_schema(
-            config,
-            schemas.get_config_schema(),
-            'Invalid config. See: '
-            'https://docs.skypilot.co/en/latest/reference/config.html. '  # pylint: disable=line-too-long
-            'Error: ',
-            skip_none=False)
-        _set_config_overridden(True)
-        _set_loaded_config(config)
-        _set_loaded_config_path(_get_loaded_config_path() +
-                                override_config_path)
-        yield
+        with secure_ctx:
+            common_utils.validate_schema(
+                config,
+                schemas.get_config_schema(),
+                'Invalid config. See: '
+                'https://docs.skypilot.co/en/latest/reference/config.html. '  # pylint: disable=line-too-long
+                'Error: ',
+                skip_none=False)
+            _set_config_overridden(True)
+            _set_loaded_config(config)
+            _set_loaded_config_path(_get_loaded_config_path() +
+                                    override_config_path)
+            yield
     except exceptions.InvalidSkyPilotConfigError as e:
         with ux_utils.print_exception_no_traceback():
             raise exceptions.InvalidSkyPilotConfigError(

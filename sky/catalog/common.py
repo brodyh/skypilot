@@ -371,13 +371,7 @@ def get_hourly_cost_impl(
 
     # If the zone is specified, only one row should be found by the query.
     assert zone is None or len(df) == 1, df
-    if use_spot:
-        price_str = 'SpotPrice'
-    else:
-        price_str = 'Price'
-        # For AWS/Azure/GCP on-demand instances, the price is the same across
-        # all the zones in the same region.
-        assert region is None or len(set(df[price_str])) == 1, df
+    price_str = 'SpotPrice' if use_spot else 'Price'
 
     if pd.isna(df[price_str]).all():
         with ux_utils.print_exception_no_traceback():
