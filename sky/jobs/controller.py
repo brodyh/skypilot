@@ -20,6 +20,7 @@ import dotenv
 import sky
 from sky import core
 from sky import exceptions
+from sky import global_user_state
 from sky import sky_logging
 from sky import skypilot_config
 from sky.adaptors import common as adaptors_common
@@ -162,6 +163,11 @@ class JobController:
         self._backend = cloud_vm_ray_backend.CloudVmRayBackend()
         self._pool = pool
 
+        # Track current cluster info for log download on cancel/fail
+        self._current_cluster_name: Optional[str] = None
+        self._current_job_id_on_pool_cluster: Optional[int] = None
+        self._current_task_id: int = 0
+
         # pylint: disable=line-too-long
         # Add a unique identifier to the task environment variables, so that
         # the user can have the same id for multiple recoveries.
@@ -279,6 +285,52 @@ class JobController:
                 logger.warning(
                     f'Unexpected error refreshing ECR credentials: {e}. '
                     'Proceeding with existing credentials.')
+
+    async def _try_download_logs_on_failure(self) -> None:
+        """Best-effort attempt to download logs when job is cancelled or fails.
+
+        This uses the tracked cluster info to try to download logs before
+        the job is marked as cancelled or failed. This helps preserve logs
+        that would otherwise be lost.
+        """
+        if self._current_cluster_name is None:
+            logger.info('No cluster name available for log download.')
+            return
+
+        try:
+            # Get the cluster handle
+            handle = await context_utils.to_thread(
+                global_user_state.get_handle_from_cluster_name,
+                self._current_cluster_name)
+            if handle is None:
+                logger.info(
+                    f'Cluster {self._current_cluster_name} not found. '
+                    'Skipping log download.')
+                return
+
+            # Verify handle type (should always be CloudVmRayResourceHandle
+            # for managed jobs)
+            if not isinstance(
+                    handle,
+                    cloud_vm_ray_backend.CloudVmRayResourceHandle):
+                logger.warning(
+                    f'Unexpected handle type: {type(handle)}. '
+                    'Skipping log download.')
+                return
+
+            logger.info(
+                f'Attempting to download logs from {self._current_cluster_name} '
+                f'before cleanup (task_id={self._current_task_id}).')
+            await context_utils.to_thread(
+                self._download_log_and_stream,
+                self._current_task_id,
+                handle,
+                self._current_job_id_on_pool_cluster)
+            logger.info('Successfully downloaded logs before cleanup.')
+        except Exception as e:  # pylint: disable=broad-except
+            logger.warning(
+                f'Failed to download logs on failure/cancellation: '
+                f'{common_utils.format_exception(e)}')
 
     def _download_log_and_stream(
         self,
@@ -479,6 +531,11 @@ class JobController:
                             'been quickly cancelled.')
                 raise asyncio.CancelledError()
         assert cluster_name is not None, (cluster_name, job_id_on_pool_cluster)
+
+        # Track cluster info for log download on cancel/fail
+        self._current_cluster_name = cluster_name
+        self._current_job_id_on_pool_cluster = job_id_on_pool_cluster
+        self._current_task_id = task_id
 
         if not is_resume:
             await managed_job_state.set_started_async(
@@ -841,10 +898,12 @@ class JobController:
             await self._update_failed_task_state(
                 task_id, managed_job_state.ManagedJobStatus.FAILED_NO_RESOURCE,
                 failure_reason)
-        except asyncio.CancelledError:  # pylint: disable=try-except-raise
-            # have this here to avoid getting caught by the general except block
-            # below.
+        except asyncio.CancelledError:
+            # Try to download logs before cancellation completes
             cancelled = True
+            logger.info(f'Job {self._job_id} cancelled, attempting to '
+                        'download logs before cleanup.')
+            await self._try_download_logs_on_failure()
             raise
         except (Exception, SystemExit) as e:  # pylint: disable=broad-except
             logger.error(
@@ -854,6 +913,8 @@ class JobController:
             msg = ('Unexpected error occurred: ' +
                    common_utils.format_exception(e, use_bracket=True))
             logger.error(msg)
+            # Try to download logs before marking as failed
+            await self._try_download_logs_on_failure()
             await self._update_failed_task_state(
                 task_id, managed_job_state.ManagedJobStatus.FAILED_CONTROLLER,
                 msg)
