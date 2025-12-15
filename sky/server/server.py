@@ -1462,6 +1462,88 @@ async def cost_report(request: fastapi.Request,
     )
 
 
+@app.post('/api/cleanup_clients')
+async def cleanup_clients(
+        request: fastapi.Request,
+        cleanup_body: payloads.CleanupClientsBody) -> Dict[str, str]:
+    """Cleans up the ~/.sky/api_server/clients directory.
+
+    This endpoint allows cleaning up uploaded files and temporary data stored
+    in the API server's clients directory. Either target_user_hash or
+    target_user_name can be provided to specify which user's directory to clean.
+    If neither is provided, the authenticated user's directory is cleaned.
+
+    Args:
+        cleanup_body: The request body containing optional target_user_hash
+            or target_user_name.
+
+    Returns:
+        A dictionary with status message.
+    """
+    # Determine which user's directory to clean up
+    user_hash = cleanup_body.target_user_hash
+
+    # If username is provided, resolve it to user hash
+    if user_hash is None and cleanup_body.target_user_name is not None:
+        users = global_user_state.get_user_by_name(
+            cleanup_body.target_user_name)
+        if not users:
+            raise fastapi.HTTPException(
+                status_code=404,
+                detail=
+                f'User with name {cleanup_body.target_user_name!r} not found')
+        if len(users) > 1:
+            user_hashes = [u.id for u in users]
+            raise fastapi.HTTPException(
+                status_code=400,
+                detail=
+                f'Multiple users found with name {cleanup_body.target_user_name!r}: '
+                f'{user_hashes}. Please use --user-hash instead.')
+        user_hash = users[0].id
+
+    # If neither username nor hash is provided, use authenticated user
+    if user_hash is None:
+        if request.state.auth_user is not None:
+            user_hash = request.state.auth_user.id
+        else:
+            user_hash = cleanup_body.env_vars.get(constants.USER_ID_ENV_VAR)
+
+    if user_hash is None:
+        raise fastapi.HTTPException(
+            status_code=400,
+            detail='Could not determine user hash. Please provide user_hash '
+            'or user_name parameter, or authenticate.')
+
+    client_dir = common.API_SERVER_CLIENT_DIR.expanduser().resolve()
+    user_client_dir = client_dir / user_hash
+
+    # Security check: make sure we're only cleaning within the clients directory
+    if not str(user_client_dir).startswith(str(client_dir)):
+        raise fastapi.HTTPException(
+            status_code=403,
+            detail='Invalid user hash - path traversal detected')
+
+    try:
+
+        def _cleanup():
+            if user_client_dir.exists():
+                shutil.rmtree(user_client_dir, ignore_errors=False)
+                logger.info(f'Cleaned up client directory for user {user_hash}')
+                return f'Successfully cleaned up client directory for user {user_hash}'
+            else:
+                logger.info(
+                    f'Client directory for user {user_hash} does not exist')
+                return f'Client directory for user {user_hash} does not exist'
+
+        message = await context_utils.to_thread(_cleanup)
+        return {'status': 'success', 'message': message}
+    except Exception as e:
+        logger.error(f'Error cleaning up client directory: {e}')
+        raise fastapi.HTTPException(
+            status_code=500,
+            detail=f'Error cleaning up client directory: {str(e)}')
+
+
 @app.get('/storage/ls')
 async def storage_ls(request: fastapi.Request) -> None:
     """Gets the storages."""

@@ -2744,3 +2744,52 @@ def api_logout() -> None:
     _clear_api_server_config()
     logger.info(f'{colorama.Fore.GREEN}Logged out of SkyPilot API server.'
                 f'{colorama.Style.RESET_ALL}')
+
+
+@usage_lib.entrypoint
+@annotations.client_api
+def api_cleanup_clients(user_hash: Optional[str] = None,
+                        user_name: Optional[str] = None) -> Dict[str, str]:
+    """Clean up files in the API server's clients directory.
+
+    This removes uploaded files and temporary data stored in
+    ~/.sky/api_server/clients/<user_hash>/. If neither user_hash nor user_name
+    is specified, cleans up the current user's directory.
+
+    Args:
+        user_hash: The user hash to clean up. If None, cleans up the
+            authenticated user's directory.
+        user_name: The username to clean up. If provided, this will be
+            resolved to a user hash on the server side. Cannot be used
+            together with user_hash.
+
+    Returns:
+        A dictionary with status and message.
+
+    Raises:
+        ValueError: If both user_hash and user_name are provided.
+    """
+    if user_hash is not None and user_name is not None:
+        raise ValueError('Cannot specify both user_hash and user_name')
+
+    body = payloads.CleanupClientsBody(target_user_hash=user_hash,
+                                       target_user_name=user_name)
+
+    if user_hash is None and user_name is None:
+        logger.info('Cleaning up client directory...')
+    elif user_name is not None:
+        logger.info(f'Cleaning up client directory for user {user_name!r}...')
+    else:
+        logger.info(f'Cleaning up client directory for user {user_hash!r}...')
+
+    response = server_common.make_authenticated_request(
+        'POST',
+        '/api/cleanup_clients',
+        json=json.loads(body.model_dump_json()),
+        timeout=30)
+
+    result = response.json()
+    message = result.get('message', 'Client directory cleaned successfully')
+    logger.info(f'{colorama.Fore.GREEN}{message}'
+                f'{colorama.Style.RESET_ALL}')
+    return result

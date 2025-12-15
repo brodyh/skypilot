@@ -6510,6 +6510,32 @@ def api_logout():
     sdk.api_logout()
 
 
+@api.command('clean', cls=_DocumentedCodeCommand)
+@flags.config_option(expose_value=False)
+@click.option('--user-hash',
+              type=str,
+              default=None,
+              help='The user hash to clean up. If not specified, cleans up '
+              'the authenticated user\'s directory.')
+@click.option('--user-name',
+              type=str,
+              default=None,
+              help='The username to clean up. If provided, this will be '
+              'resolved to a user hash on the server side. Cannot be used '
+              'together with --user-hash.')
+@usage_lib.entrypoint
+def api_clean(user_hash: Optional[str], user_name: Optional[str]):
+    """Clean up files in the API server's clients directory.
+
+    This removes uploaded files and temporary data stored in
+    ~/.sky/api_server/clients/<user_hash>/.
+    """
+    if user_hash is not None and user_name is not None:
+        raise click.UsageError(
+            'Cannot specify both --user-hash and --user-name')
+    sdk.api_cleanup_clients(user_hash=user_hash, user_name=user_name)
+
+
 @api.command('info', cls=_DocumentedCodeCommand)
 @flags.config_option(expose_value=False)
 @usage_lib.entrypoint

@@ -834,6 +834,12 @@ class CostReportBody(RequestBody):
     dashboard_summary_response: bool = False
 
 
+class CleanupClientsBody(RequestBody):
+    """The request body for the cleanup clients directory endpoint."""
+    target_user_hash: Optional[str] = None
+    target_user_name: Optional[str] = None
+
+
 class RequestPayload(BasePayload):
     """The payload for the requests."""
 
