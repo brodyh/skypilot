@@ -196,7 +196,18 @@ def _with_docker_login_config(
         assert resources.image_id is not None and len(
             resources.image_id) == 1, resources.image_id
         region = list(resources.image_id.keys())[0]
-        return resources.copy(image_id={region: 'docker:' + docker_image},
+        original_image_id = resources.image_id[region]
+
+        # Preserve composite format (ami-xxx:docker:yyy) if present
+        # Otherwise use legacy format (docker:yyy)
+        if ':docker:' in original_image_id:
+            # Composite format already has base AMI, keep it as-is
+            new_image_id = original_image_id
+        else:
+            # Legacy format - reconstruct with docker: prefix
+            new_image_id = 'docker:' + docker_image
+
+        return resources.copy(image_id={region: new_image_id},
                               _docker_login_config=docker_login_config)
 
     new_resources = []

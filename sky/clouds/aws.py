@@ -461,6 +461,18 @@ class AWS(clouds.Cloud):
         else:
             assert region_name in image_id, image_id
             image_id_str = image_id[region_name]
+
+        # Handle Docker image formats:
+        # - Composite format: ami-xxx:docker:image -> extract ami-xxx
+        # - Legacy format: docker:image -> return None (use default AMI)
+        if ':docker:' in image_id_str:
+            # Composite format: extract base AMI
+            image_id_str = image_id_str.split(':docker:', 1)[0]
+            logger.info(f'Using custom base AMI for Docker: {image_id_str}')
+        elif image_id_str.startswith('docker:'):
+            # Legacy format: no custom base AMI specified, use default
+            return cls._get_default_ami(region_name, instance_type)
+
         if image_id_str.startswith('skypilot:'):
             image_id_str = catalog.get_image_id_from_tag(image_id_str,
                                                          region_name,
@@ -543,6 +555,13 @@ class AWS(clouds.Cloud):
 
     @classmethod
     def get_image_size(cls, image_id: str, region: Optional[str]) -> float:
+        # Strip :docker:... suffix if present (composite format ami-xxx:docker:yyy)
+        if ':docker:' in image_id:
+            image_id = image_id.split(':docker:', 1)[0]
+        # Legacy docker: format uses default AMI
+        elif image_id.startswith('docker:'):
+            return DEFAULT_AMI_GB
+
         if image_id.startswith('skypilot:'):
             return DEFAULT_AMI_GB
         assert region is not None, (image_id, region)
@@ -588,6 +607,10 @@ class AWS(clouds.Cloud):
                                  maxsize=_AWS_PROFILE_SCOPED_FUNC_CACHE_SIZE)
     def get_image_root_device_name(cls, image_id: str,
                                    region: Optional[str]) -> str:
+        # Strip :docker:... suffix if present (composite format)
+        if ':docker:' in image_id:
+            image_id = image_id.split(':docker:', 1)[0]
+
         if image_id.startswith('skypilot:'):
             return DEFAULT_ROOT_DEVICE_NAME
         assert region is not None, (image_id, region)
@@ -760,7 +783,10 @@ class AWS(clouds.Cloud):
 
         docker_run_options = []
         if resources.extract_docker_image() is not None:
-            image_id_to_use = None
+            # When using Docker, pass through the image_id (which may contain
+            # composite format ami-xxx:docker:yyy). The _get_image_id method
+            # will extract just the base AMI part.
+            image_id_to_use = resources.image_id
             if enable_efa:
                 docker_run_options = _EFA_DOCKER_RUN_OPTIONS
         else:

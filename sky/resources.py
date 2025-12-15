@@ -1266,6 +1266,11 @@ class Resources:
             image_key = list(self.image_id.keys())[0]
             if image_key == self.region or image_key is None:
                 image_id = self.image_id[image_key]
+                # Check for composite format: base-ami:docker:image
+                if ':docker:' in image_id:
+                    # Split on ':docker:' and return everything after
+                    return image_id.split(':docker:', 1)[1]
+                # Legacy format: docker:image
                 if image_id.startswith('docker:'):
                     return image_id[len('docker:'):]
         return None
