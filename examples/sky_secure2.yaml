@@ -1,0 +1,49 @@
+
+name: vast-secure-off-demo
+
+# workdir: .
+
+# Turn off secure-only filtering for Vast; applies to this task only.
+config:
+  vast:
+    secure_only: true
+
+resources:
+  cloud: vast
+  # accelerators: {RTX3060:1, RTXA5000:1, V100:1, RTXA2000:1, RTX4060:1, RTX3090:1}
+  accelerators: RTX3060:1          # pick any RunPod accelerator/type you prefer
+  use_spot: false
+  # cpus: 8+
+  # memory: 32GB+
+  # disk_size: 128
+  image_id: docker:brodyh/carla:0.9.16
+  any_of:
+    # North America
+    - region: "California, US, NA"
+    - region: "Alberta, CA, NA"
+    - region: "Maryland, US, NA"
+    - region: "Texas, US, NA"
+
+    # Oceania
+    # - region: "Australia, AU, OC"
+
+    # # Europe
+    # - region: "Czechia, CZ, EU"
+    # - region: "France, FR, EU"
+    # - region: "Germany, DE, EU"
+    # - region: "Iceland, IS, EU"
+    # - region: "Norway, NO, EU"
+    # - region: "Romania, RO, EU"
+    # - region: "Slovenia, SI, EU"
+    # - region: "The Netherlands, NL, EU"
+
+    # # Asia
+    # - region: "Japan, JP, AS"
+    # - region: "Vietnam, VN, AS"
+
+run: |
+  nvidia-smi
+  sleep 120
+  echo 'done'
+
+# codex resume 0199b2a0-23e1-7c52-b91a-be99e9bfc13c

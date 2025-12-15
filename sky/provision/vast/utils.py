@@ -34,8 +34,8 @@ def list_instances() -> Dict[str, Dict[str, Any]]:
 
 
 def launch(name: str, instance_type: str, region: str, disk_size: int,
-           image_name: str, ports: Optional[List[int]],
-           preemptible: bool) -> str:
+           image_name: str, ports: Optional[List[int]], preemptible: bool,
+           secure_only: bool) -> str:
     """Launches an instance with the given parameters.
 
     Converts the instance_type to the Vast GPU name, finds the specs for the
@@ -98,6 +98,8 @@ def launch(name: str, instance_type: str, region: str, disk_size: int,
         f'gpu_name="{gpu_name}"',
         f'cpu_ram>="{cpu_ram}"',
     ]
+    if secure_only:
+        query_parts.append('datacenter=true')
 
     query = ' '.join(query_parts)
 

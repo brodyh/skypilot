@@ -1,0 +1,20 @@
+
+name: debug
+
+# Turn off secure-only filtering for Vast; applies to this task only.
+# config:
+#   vast:
+#     secure_only: false
+
+workdir: .
+
+resources:
+  infra: aws/us-west-2
+  instance_type: g6.xlarge
+  image_id: ami-0f666d43d12ebc3cc:docker:312471575300.dkr.ecr.us-west-2.amazonaws.com/carla:0.9.16
+  use_spot: false
+
+run: |
+  nvidia-smi
+  # cat src/l6/rl/ppo_training.py
+  sleep 20

@@ -1,0 +1,37 @@
+
+# workdir: .
+
+resources:
+  cloud: aws
+  # region: us-east-1
+  # zone: us-east-1-atl-2a
+  instance_type: g6e.8xlarge
+
+  use_spot: true
+  # cpus: 8+
+  # memory: 32GB+
+  # disk_size: 128
+  # image_id: docker:brodyh/carla:0.9.16
+  # region: "Texas, US, NA"
+  # any_of:
+  #   # North America
+  #   - region: "California, US, NA"
+  #   - region: "Alberta, CA, NA"
+  #   - region: "Maryland, US, NA"
+  #   - region: "Texas, US, NA"
+
+
+  # region:
+  #   any_of:
+  #     - us-east-1
+
+
+run: |
+  set -euo pipefail
+  nvidia-smi
+  # echo "simulating failure"
+  # exit 1
+  sleep 120
+  echo 'done'
+
+# codex resume 0199b2a0-23e1-7c52-b91a-be99e9bfc13c

@@ -161,6 +161,9 @@ Below is the configuration syntax and some example values. See detailed explanat
     :ref:`resource_group_vm <config-yaml-azure-resource-group-vm>`: user-resource-group-name
     :ref:`storage_account <config-yaml-azure-storage-account>`: user-storage-account-name
 
+  :ref:`vast <config-yaml-vast>`:
+    :ref:`secure_only <config-yaml-vast-secure-only>`: true
+
   :ref:`oci <config-yaml-oci>`:
     region_configs:
       :ref:`default <config-yaml-oci>`:
@@ -1210,6 +1213,33 @@ Example:
   azure:
     resource_group_vm: user-resource-group-name
     storage_account: user-storage-account-name
+
+.. _config-yaml-vast:
+
+``vast``
+~~~~~~~~~
+
+Advanced Vast configuration (optional).
+
+.. _config-yaml-vast-secure-only:
+
+``vast.secure_only``
+~~~~~~~~~~~~~~~~~~~~
+
+Require secure Vast instances.
+
+Default: ``true``. When enabled, SkyPilot only considers Vast offers hosted
+in verified datacenters (`datacenter=true`) when selecting resources. Set to
+``false`` to allow any matching Vast offer. This setting affects both catalog
+lookups (e.g., ``sky show-gpus``) and provisioning (``sky launch``). You can
+override it per task via the :ref:`config field <config-client-cli-flag>`.
+
+Example:
+
+.. code-block:: yaml
+
+  vast:
+    secure_only: false
 
 .. _config-yaml-kubernetes:
 

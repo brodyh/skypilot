@@ -1339,6 +1339,16 @@ def get_config_schema():
                 },
             }
         },
+        'vast': {
+            'type': 'object',
+            'required': [],
+            'additionalProperties': False,
+            'properties': {
+                'secure_only': {
+                    'type': 'boolean',
+                },
+            }
+        },
         'kubernetes': {
             'type': 'object',
             'required': [],

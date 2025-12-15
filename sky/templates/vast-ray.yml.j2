@@ -10,6 +10,7 @@ provider:
   module: sky.provision.vast
   region: "{{region}}"
   disable_launch_config_check: true
+  secure_only: {{ 'true' if secure_only else 'false' }}
 
 auth:
   ssh_user: root
