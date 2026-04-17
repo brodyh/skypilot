@@ -192,22 +192,22 @@ def _with_docker_login_config(
                            'in `image_id`. The login configs will be '
                            f'ignored.{colorama.Style.RESET_ALL}')
             return resources
-        # Already checked in extract_docker_image
-        assert resources.image_id is not None and len(
-            resources.image_id) == 1, resources.image_id
-        region = list(resources.image_id.keys())[0]
-        original_image_id = resources.image_id[region]
+        # Rebuild the image_id dict preserving every region entry. For each
+        # entry, keep the composite format (ami-xxx:docker:yyy) as-is and
+        # rewrite the legacy form (docker:yyy) to point at the resolved
+        # docker_image. Multi-region dicts are supported because
+        # extract_docker_image() now picks per-region at placement time.
+        assert resources.image_id is not None, resources.image_id
+        new_image_id: Dict[Optional[str], str] = {}
+        for region, original_image_id in resources.image_id.items():
+            if ':docker:' in original_image_id:
+                # Composite format already has base AMI, keep it as-is
+                new_image_id[region] = original_image_id
+            else:
+                # Legacy format - reconstruct with docker: prefix
+                new_image_id[region] = 'docker:' + docker_image
 
-        # Preserve composite format (ami-xxx:docker:yyy) if present
-        # Otherwise use legacy format (docker:yyy)
-        if ':docker:' in original_image_id:
-            # Composite format already has base AMI, keep it as-is
-            new_image_id = original_image_id
-        else:
-            # Legacy format - reconstruct with docker: prefix
-            new_image_id = 'docker:' + docker_image
-
-        return resources.copy(image_id={region: new_image_id},
+        return resources.copy(image_id=new_image_id,
                               _docker_login_config=docker_login_config)
 
     new_resources = []
