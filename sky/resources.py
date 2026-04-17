@@ -1260,19 +1260,29 @@ class Resources:
     def extract_docker_image(self) -> Optional[str]:
         if self.image_id is None:
             return None
-        # Handle dict image_id
-        if len(self.image_id) == 1:
-            # Check if the single key matches the region or is None (any region)
+        # Handle dict image_id with 1+ entries. Pick the entry keyed to the
+        # current region (or the catch-all None key if no region is set).
+        # Multi-region dicts let the optimizer pick a region at launch time,
+        # but once placed, only that region's entry matters.
+        image_key: Optional[str] = None
+        if self.region is not None and self.region in self.image_id:
+            image_key = self.region
+        elif None in self.image_id:
+            image_key = None
+        elif len(self.image_id) == 1:
+            # Fallback to the single entry's key when no region is set yet
+            # (e.g. during resource validation before placement).
             image_key = list(self.image_id.keys())[0]
-            if image_key == self.region or image_key is None:
-                image_id = self.image_id[image_key]
-                # Check for composite format: base-ami:docker:image
-                if ':docker:' in image_id:
-                    # Split on ':docker:' and return everything after
-                    return image_id.split(':docker:', 1)[1]
-                # Legacy format: docker:image
-                if image_id.startswith('docker:'):
-                    return image_id[len('docker:'):]
+        else:
+            return None
+        image_id = self.image_id[image_key]
+        # Check for composite format: base-ami:docker:image
+        if ':docker:' in image_id:
+            # Split on ':docker:' and return everything after
+            return image_id.split(':docker:', 1)[1]
+        # Legacy format: docker:image
+        if image_id.startswith('docker:'):
+            return image_id[len('docker:'):]
         return None
 
     def _try_validate_image_id(self) -> None:
