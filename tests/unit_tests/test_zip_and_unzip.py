@@ -115,3 +115,65 @@ def test_unzip_file(skyignore_dir, tmp_path):
         # Verify empty folders are preserved
         assert (unzipped_dir / 'empty-folder').is_dir()
         assert not any((unzipped_dir / 'empty-folder').iterdir())
+
+
+def _make_zip_with_one_file(zip_path: pathlib.Path, member_rel_path: str,
+                            body: bytes) -> None:
+    """Write a tiny zip containing a single file member with the given body."""
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_STORED) as zf:
+        zf.writestr(member_rel_path, body)
+
+
+def test_unzip_file_leaves_no_tmp_files(tmp_path):
+    """The write-then-rename path must clean up its .tmp.* scratch files."""
+    member = 'data/payload.bin'
+    body = b'0123456789' * 2048  # 20 KB
+    zip_path = tmp_path / 'src.zip'
+    _make_zip_with_one_file(zip_path, member, body)
+
+    staging = tmp_path / 'staging'
+    staging.mkdir()
+
+    asyncio.run(server.unzip_file(zip_path, staging))
+
+    # Final file is there with the correct bytes
+    final = staging / member
+    assert final.read_bytes() == body
+    # Zip was removed by the unzip_file finally block
+    assert not zip_path.exists()
+    # No .tmp.* debris left behind next to the final file
+    leftover = list((staging / 'data').glob('payload.bin.tmp.*'))
+    assert leftover == [], f'tmp files leaked: {leftover}'
+
+
+def test_unzip_file_reader_with_open_fd_sees_old_bytes(tmp_path):
+    """Atomic replace: a reader holding an fd on the old file sees the OLD
+    bytes in full even after unzip_file rewrites the path with new content.
+
+    This is the invariant that protects the concurrent aws-cli S3 sync from
+    IncompleteBody when a second submission overwrites the same staging file.
+    """
+    member = 'data/payload.bin'
+    old_body = b'A' * 4096
+    new_body = b'B' * 4096
+
+    staging = tmp_path / 'staging'
+    (staging / 'data').mkdir(parents=True)
+
+    # Plant the "old" file at the final path and open a read fd on it,
+    # simulating aws-cli mid-sync reading the staging file.
+    final = staging / member
+    final.write_bytes(old_body)
+    with open(final, 'rb') as reader_fd:
+        # Now run unzip_file with a zip containing DIFFERENT bytes for the
+        # same member — this must not affect the open reader_fd.
+        zip_path = tmp_path / 'src.zip'
+        _make_zip_with_one_file(zip_path, member, new_body)
+        asyncio.run(server.unzip_file(zip_path, staging))
+
+        # The reader_fd, which was opened BEFORE the unzip, must still see the
+        # complete old bytes — POSIX inode semantics via os.replace().
+        assert reader_fd.read() == old_body
+
+    # A fresh read after the rename sees the new bytes.
+    assert final.read_bytes() == new_body

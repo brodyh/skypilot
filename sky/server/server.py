@@ -1066,13 +1066,41 @@ async def unzip_file(zip_file_path: pathlib.Path,
                         new_path.mkdir(parents=True, exist_ok=True)
                         continue
 
-                    # Handle files
+                    # Handle files. Write to a unique temp path and atomically
+                    # rename onto the final path so concurrent readers never
+                    # observe a half-written file. Without this, a reader
+                    # (e.g. the aws s3 sync that publishes this workdir to
+                    # s3://.../sky-jobs/job-<id>/workdir/) that stat()s the
+                    # file for Content-Length and then streams bytes can hit
+                    # EOF early when a second concurrent unzip truncates and
+                    # rewrites the same path, producing `IncompleteBody` on
+                    # the PutObject. Since the staging dir
+                    # (client_file_mounts_dir) is shared across all
+                    # submissions from the same user_hash, this race is
+                    # triggered whenever two sky.jobs.launch calls from the
+                    # same client overlap with workdirs that include the
+                    # same file. os.replace() is atomic within a single
+                    # filesystem, and Linux inode semantics mean any reader
+                    # that already opened the old file keeps reading it in
+                    # full via its fd after the rename.
                     new_path.parent.mkdir(parents=True, exist_ok=True)
-                    with zipf.open(member) as member_file, new_path.open(
-                            'wb') as f:
-                        # Use shutil.copyfileobj to copy files in chunks,
-                        # so it does not load the entire file into memory.
-                        shutil.copyfileobj(member_file, f)
+                    tmp_path = new_path.with_name(
+                        f'{new_path.name}.tmp.{os.getpid()}.'
+                        f'{uuid.uuid4().hex[:8]}')
+                    try:
+                        with zipf.open(member) as member_file, tmp_path.open(
+                                'wb') as f:
+                            # Use shutil.copyfileobj to copy files in chunks,
+                            # so it does not load the entire file into
+                            # memory.
+                            shutil.copyfileobj(member_file, f)
+                        os.replace(tmp_path, new_path)
+                    finally:
+                        # Clean up the temp path if rename didn't happen
+                        # (exception during copy). missing_ok covers the
+                        # successful-rename case.
+                        if tmp_path.exists():
+                            tmp_path.unlink(missing_ok=True)
         except zipfile.BadZipFile as e:
             logger.error(f'Bad zip file: {zip_file_path}')
             raise fastapi.HTTPException(
